@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-
 	"github.com/roysitumorang/bot_laukpauk/internal/catalog"
 	"github.com/roysitumorang/bot_laukpauk/internal/config"
 	"github.com/roysitumorang/bot_laukpauk/internal/gmaps"
@@ -19,13 +17,14 @@ import (
 	"github.com/roysitumorang/bot_laukpauk/internal/sheets"
 	"github.com/roysitumorang/bot_laukpauk/internal/state"
 	"github.com/roysitumorang/bot_laukpauk/internal/store"
+	tg "github.com/roysitumorang/bot_laukpauk/internal/telegram"
 	"github.com/roysitumorang/bot_laukpauk/internal/xendit"
 )
 
 // Deps are the bot's collaborators.
 type Deps struct {
 	Config   *config.Config
-	API      *tgbotapi.BotAPI
+	API      *tg.Client
 	DB       *store.DB
 	Sheets   *sheets.Client // nil when Google Sheets is not configured
 	Maps     *gmaps.Client
@@ -72,15 +71,15 @@ type req struct {
 	uid    int64
 	chatID int64
 	sess   *state.Session
-	msg    *tgbotapi.Message       // set for messages
-	cb     *tgbotapi.CallbackQuery // set for callback queries
+	msg    *tg.Message       // set for messages
+	cb     *tg.CallbackQuery // set for callback queries
 }
 
 func (r *req) isCallback() bool { return r.cb != nil }
 
 // HandleUpdate processes one Telegram update. Updates for the same user are
 // handled one at a time so their conversation state stays consistent.
-func (b *Bot) HandleUpdate(parent context.Context, upd tgbotapi.Update) {
+func (b *Bot) HandleUpdate(parent context.Context, upd tg.Update) {
 	r := &req{}
 	switch {
 	case upd.Message != nil && upd.Message.From != nil:
@@ -240,7 +239,7 @@ func (b *Bot) callback(r *req) {
 	case data == "lanjut_checkout":
 		b.answer(r, "")
 		if r.cb.Message != nil {
-			b.request(tgbotapi.NewDeleteMessage(r.chatID, r.cb.Message.MessageID))
+			b.deleteMessage(r.chatID, r.cb.Message.MessageID)
 		}
 	case prefix == "kirim_barang":
 		b.cbKirimBarang(r, arg)
@@ -253,35 +252,29 @@ func (b *Bot) callback(r *req) {
 
 // ---- Telegram helpers -------------------------------------------------------
 
-func btn(text, data string) tgbotapi.InlineKeyboardButton {
-	return tgbotapi.NewInlineKeyboardButtonData(text, data)
+func btn(text, data string) tg.InlineKeyboardButton { return tg.CallbackButton(text, data) }
+
+func kb(rows ...[]tg.InlineKeyboardButton) *tg.InlineKeyboardMarkup {
+	return &tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
-func kb(rows ...[]tgbotapi.InlineKeyboardButton) *tgbotapi.InlineKeyboardMarkup {
-	m := tgbotapi.NewInlineKeyboardMarkup(rows...)
-	return &m
-}
-
-func row(buttons ...tgbotapi.InlineKeyboardButton) []tgbotapi.InlineKeyboardButton {
-	return buttons
-}
+func row(buttons ...tg.InlineKeyboardButton) []tg.InlineKeyboardButton { return buttons }
 
 var batalKB = kb(row(btn("❌ Batalkan Pesanan", "batal_pesanan")))
 
-func (b *Bot) request(c tgbotapi.Chattable) {
-	if _, err := b.API.Request(c); err != nil && !strings.Contains(err.Error(), "message is not modified") {
-		log.Printf("telegram request: %v", err)
-	}
+// apiCtx bounds a single outgoing Bot API call.
+func apiCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 30*time.Second)
 }
 
 // send sends a plain-text message.
-func (b *Bot) send(chatID int64, text string, markup *tgbotapi.InlineKeyboardMarkup) bool {
-	m := tgbotapi.NewMessage(chatID, text)
-	m.DisableWebPagePreview = true
-	if markup != nil {
-		m.ReplyMarkup = markup
-	}
-	if _, err := b.API.Send(m); err != nil {
+func (b *Bot) send(chatID int64, text string, markup *tg.InlineKeyboardMarkup) bool {
+	ctx, cancel := apiCtx()
+	defer cancel()
+	_, err := b.API.SendMessage(ctx, tg.SendMessageParams{
+		ChatID: chatID, Text: text, DisableWebPagePreview: true, ReplyMarkup: markup,
+	})
+	if err != nil {
 		log.Printf("send to %d: %v", chatID, err)
 		return false
 	}
@@ -307,37 +300,42 @@ func (b *Bot) sendLong(chatID int64, text string) {
 	}
 }
 
-func (b *Bot) reply(r *req, text string, markup *tgbotapi.InlineKeyboardMarkup) {
+func (b *Bot) reply(r *req, text string, markup *tg.InlineKeyboardMarkup) {
 	b.send(r.chatID, text, markup)
 }
 
 // replyOrEdit edits the message that carried the pressed button, or sends a
 // new message when handling a command.
-func (b *Bot) replyOrEdit(r *req, text string, markup *tgbotapi.InlineKeyboardMarkup) {
+func (b *Bot) replyOrEdit(r *req, text string, markup *tg.InlineKeyboardMarkup) {
 	if r.cb == nil || r.cb.Message == nil {
 		b.send(r.chatID, text, markup)
 		return
 	}
-	e := tgbotapi.NewEditMessageText(r.chatID, r.cb.Message.MessageID, text)
-	e.DisableWebPagePreview = true
-	if markup != nil {
-		e.ReplyMarkup = markup
-	}
-	if _, err := b.API.Send(e); err != nil {
-		if strings.Contains(err.Error(), "message is not modified") {
-			return
-		}
+	ctx, cancel := apiCtx()
+	defer cancel()
+	err := b.API.EditMessageText(ctx, tg.EditMessageTextParams{
+		ChatID: r.chatID, MessageID: r.cb.Message.MessageID, Text: text,
+		DisableWebPagePreview: true, ReplyMarkup: markup,
+	})
+	if err != nil && !tg.IsNotModified(err) {
 		log.Printf("edit message: %v", err)
 		b.send(r.chatID, text, markup)
 	}
 }
 
+func (b *Bot) answerCallback(r *req, text string, alert bool) {
+	ctx, cancel := apiCtx()
+	defer cancel()
+	if err := b.API.AnswerCallbackQuery(ctx, r.cb.ID, text, alert); err != nil {
+		log.Printf("answer callback: %v", err)
+	}
+}
+
 // answer acknowledges a callback query (optionally with a toast).
 func (b *Bot) answer(r *req, text string) {
-	if r.cb == nil {
-		return
+	if r.cb != nil {
+		b.answerCallback(r, text, false)
 	}
-	b.request(tgbotapi.NewCallback(r.cb.ID, text))
 }
 
 // alert acknowledges a callback query with a pop-up.
@@ -346,13 +344,21 @@ func (b *Bot) alert(r *req, text string) {
 		b.reply(r, text, nil)
 		return
 	}
-	b.request(tgbotapi.NewCallbackWithAlert(r.cb.ID, text))
+	b.answerCallback(r, text, true)
+}
+
+func (b *Bot) deleteMessage(chatID int64, messageID int) {
+	ctx, cancel := apiCtx()
+	defer cancel()
+	if err := b.API.DeleteMessage(ctx, chatID, messageID); err != nil {
+		log.Printf("delete message: %v", err)
+	}
 }
 
 func (b *Bot) sendDocument(chatID int64, name string, data []byte, caption string) bool {
-	d := tgbotapi.NewDocument(chatID, tgbotapi.FileBytes{Name: name, Bytes: data})
-	d.Caption = caption
-	if _, err := b.API.Send(d); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if _, err := b.API.SendDocument(ctx, chatID, name, data, caption); err != nil {
 		log.Printf("send document to %d: %v", chatID, err)
 		return false
 	}
@@ -376,18 +382,20 @@ func (b *Bot) warnCheckoutInProgress(r *req) {
 }
 
 // SetCommands registers the command menu shown by Telegram clients.
-func (b *Bot) SetCommands() {
-	cmds := tgbotapi.NewSetMyCommands(
-		tgbotapi.BotCommand{Command: "start", Description: "Mulai belanja"},
-		tgbotapi.BotCommand{Command: "kategori", Description: "Lihat kategori produk"},
-		tgbotapi.BotCommand{Command: "produk", Description: "Cari produk"},
-		tgbotapi.BotCommand{Command: "keranjang", Description: "Lihat keranjang"},
-		tgbotapi.BotCommand{Command: "checkout", Description: "Checkout pesanan"},
-		tgbotapi.BotCommand{Command: "pesan_ulang", Description: "Pesan ulang pesanan terakhir"},
-		tgbotapi.BotCommand{Command: "status_pesanan", Description: "Cek status pesanan"},
-		tgbotapi.BotCommand{Command: "batal", Description: "Batalkan pesanan"},
-		tgbotapi.BotCommand{Command: "beri_testimoni", Description: "Beri rating & testimoni"},
-		tgbotapi.BotCommand{Command: "lihat_testimoni", Description: "Lihat testimoni pelanggan"},
-	)
-	b.request(cmds)
+func (b *Bot) SetCommands(ctx context.Context) {
+	err := b.API.SetMyCommands(ctx, []tg.BotCommand{
+		{Command: "start", Description: "Mulai belanja"},
+		{Command: "kategori", Description: "Lihat kategori produk"},
+		{Command: "produk", Description: "Cari produk"},
+		{Command: "keranjang", Description: "Lihat keranjang"},
+		{Command: "checkout", Description: "Checkout pesanan"},
+		{Command: "pesan_ulang", Description: "Pesan ulang pesanan terakhir"},
+		{Command: "status_pesanan", Description: "Cek status pesanan"},
+		{Command: "batal", Description: "Batalkan pesanan"},
+		{Command: "beri_testimoni", Description: "Beri rating & testimoni"},
+		{Command: "lihat_testimoni", Description: "Lihat testimoni pelanggan"},
+	})
+	if err != nil {
+		log.Printf("setMyCommands: %v", err)
+	}
 }

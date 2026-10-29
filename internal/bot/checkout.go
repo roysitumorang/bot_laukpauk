@@ -9,14 +9,13 @@ import (
 	"strconv"
 	"strings"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-
 	"github.com/roysitumorang/bot_laukpauk/internal/delivery"
 	"github.com/roysitumorang/bot_laukpauk/internal/gmaps"
 	"github.com/roysitumorang/bot_laukpauk/internal/money"
 	"github.com/roysitumorang/bot_laukpauk/internal/order"
 	"github.com/roysitumorang/bot_laukpauk/internal/poin"
 	"github.com/roysitumorang/bot_laukpauk/internal/state"
+	tg "github.com/roysitumorang/bot_laukpauk/internal/telegram"
 )
 
 // startCheckout begins checkout from /checkout or the Checkout button.
@@ -211,7 +210,7 @@ func (b *Bot) showVoucher(r *req) {
 		b.reply(r, "❌ Tidak ada voucher yang tersedia. Klik 'Lanjut' untuk melewati.", kb(row(btn("Lanjut", "skip_voucher"))))
 		return
 	}
-	var rows [][]tgbotapi.InlineKeyboardButton
+	var rows [][]tg.InlineKeyboardButton
 	for _, k := range codes {
 		v := vs[k]
 		label := fmt.Sprintf("%s - Diskon %s", k, money.Rupiah(v.Nilai))
@@ -286,7 +285,7 @@ func (b *Bot) showDelivery(r *req) {
 		b.reply(r, fmt.Sprintf("🚨 Belum ada jadwal pengiriman yang tersedia (toko libur: %s). Silakan coba lagi nanti atau /batal.", b.Holidays.Describe()), batalKB)
 		return
 	}
-	var rows [][]tgbotapi.InlineKeyboardButton
+	var rows [][]tg.InlineKeyboardButton
 	for _, s := range slots {
 		rows = append(rows, row(btn(s.Label, s.Data)))
 	}

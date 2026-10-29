@@ -6,13 +6,12 @@ import (
 	"strconv"
 	"strings"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-
 	"github.com/roysitumorang/bot_laukpauk/internal/catalog"
 	"github.com/roysitumorang/bot_laukpauk/internal/money"
 	"github.com/roysitumorang/bot_laukpauk/internal/order"
 	"github.com/roysitumorang/bot_laukpauk/internal/poin"
 	"github.com/roysitumorang/bot_laukpauk/internal/state"
+	tg "github.com/roysitumorang/bot_laukpauk/internal/telegram"
 	"github.com/roysitumorang/bot_laukpauk/internal/xendit"
 )
 
@@ -65,7 +64,7 @@ func (b *Bot) blockedByInvoice(r *req) bool {
 	switch {
 	case inv.Status == xendit.StatusPending:
 		markup := kb(
-			row(tgbotapi.NewInlineKeyboardButtonURL("🔗 Bayar Sekarang", r.sess.InvoiceURL)),
+			row(tg.URLButton("🔗 Bayar Sekarang", r.sess.InvoiceURL)),
 			row(btn("❌ Batalkan Pesanan", "batal_pesanan")),
 		)
 		if r.sess.InvoiceURL == "" {
@@ -92,7 +91,7 @@ func (b *Bot) cmdKategori(r *req) {
 		b.reply(r, "⚠️ Data produk tidak valid atau kosong. Coba muat ulang bot.", nil)
 		return
 	}
-	var rows [][]tgbotapi.InlineKeyboardButton
+	var rows [][]tg.InlineKeyboardButton
 	for _, c := range cats {
 		label := c
 		if label == "" {
@@ -113,7 +112,7 @@ func (b *Bot) cbKategori(r *req, key string) {
 	ps := b.Catalog.InCategory(kat)
 	for i := 0; i < len(ps); i += buttonsPerMsg {
 		end := min(i+buttonsPerMsg, len(ps))
-		var rows [][]tgbotapi.InlineKeyboardButton
+		var rows [][]tg.InlineKeyboardButton
 		for _, p := range ps[i:end] {
 			rows = append(rows, row(btn(fmt.Sprintf("%s - %s", catalog.Display(p.Nama), money.Rupiah(p.Net())), "prd:"+catalog.Key(p.Nama))))
 		}
@@ -169,7 +168,7 @@ func (b *Bot) cariProduk(r *req, query string) {
 		title = fmt.Sprintf("🔍 Ditemukan %d produk, menampilkan %d pertama. Ketik nama yang lebih spesifik untuk mempersempit:", len(hasil), maxSearchResults)
 		hasil = hasil[:maxSearchResults]
 	}
-	var rows [][]tgbotapi.InlineKeyboardButton
+	var rows [][]tg.InlineKeyboardButton
 	for _, p := range hasil {
 		rows = append(rows, row(btn(fmt.Sprintf("%s - %s", catalog.Display(p.Nama), money.Rupiah(p.Net())), "beli:"+catalog.Key(p.Nama)+":1")))
 	}
@@ -246,7 +245,7 @@ func (b *Bot) showEditKeranjang(r *req) {
 		b.replyOrEdit(r, "⚠️ Keranjang Anda kosong! Tambahkan produk terlebih dahulu.", nil)
 		return
 	}
-	var rows [][]tgbotapi.InlineKeyboardButton
+	var rows [][]tg.InlineKeyboardButton
 	for _, name := range c.Names() {
 		k := catalog.Key(name)
 		d := catalog.Display(name)

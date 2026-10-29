@@ -13,7 +13,6 @@ import (
 	"time"
 	_ "time/tzdata" // Asia/Jakarta even on minimal images
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/joho/godotenv"
 
 	"github.com/roysitumorang/bot_laukpauk/assets"
@@ -25,6 +24,7 @@ import (
 	"github.com/roysitumorang/bot_laukpauk/internal/sheets"
 	"github.com/roysitumorang/bot_laukpauk/internal/state"
 	"github.com/roysitumorang/bot_laukpauk/internal/store"
+	tg "github.com/roysitumorang/bot_laukpauk/internal/telegram"
 	"github.com/roysitumorang/bot_laukpauk/internal/xendit"
 	"github.com/roysitumorang/bot_laukpauk/migrations"
 )
@@ -70,12 +70,13 @@ func main() {
 		log.Printf("Google Sheets tidak dikonfigurasi; data hanya disimpan di PostgreSQL")
 	}
 
-	api, err := tgbotapi.NewBotAPI(cfg.BotToken)
+	api := tg.New(cfg.BotToken)
+	api.Debug = cfg.Debug
+	me, err := api.GetMe(ctx)
 	if err != nil {
 		log.Fatalf("telegram: %v", err)
 	}
-	api.Debug = cfg.Debug
-	log.Printf("login sebagai @%s", api.Self.UserName)
+	log.Printf("login sebagai @%s", me.Username)
 
 	b := bot.New(bot.Deps{
 		Config:   cfg,
@@ -94,7 +95,7 @@ func main() {
 	} else {
 		log.Printf("%d produk dimuat dari PostgreSQL", n)
 	}
-	b.SetCommands()
+	b.SetCommands(ctx)
 
 	// Background work keeps running during shutdown until it finishes or the
 	// grace period below expires.
@@ -115,39 +116,30 @@ func main() {
 		}
 	}()
 
+	allowed := []string{"message", "callback_query"}
+	pollDone := make(chan struct{})
 	if cfg.WebhookURL != "" {
-		params := tgbotapi.Params{
-			"url":             cfg.WebhookURL,
-			"allowed_updates": `["message","callback_query"]`,
-		}
-		if cfg.WebhookSecret != "" {
-			params["secret_token"] = cfg.WebhookSecret
-		}
-		if _, err := api.MakeRequest("setWebhook", params); err != nil {
+		close(pollDone)
+		if err := api.SetWebhook(ctx, cfg.WebhookURL, cfg.WebhookSecret, allowed); err != nil {
 			log.Fatalf("setWebhook: %v", err)
 		}
 		log.Printf("webhook Telegram diatur: %s", cfg.WebhookURL)
 	} else {
-		if _, err := api.Request(tgbotapi.DeleteWebhookConfig{}); err != nil {
+		if err := api.DeleteWebhook(ctx); err != nil {
 			log.Printf("deleteWebhook: %v", err)
 		}
-		u := tgbotapi.NewUpdate(0)
-		u.Timeout = 50
-		u.AllowedUpdates = []string{"message", "callback_query"}
-		updates := api.GetUpdatesChan(u)
 		go func() {
-			for upd := range updates {
+			defer close(pollDone)
+			api.Poll(ctx, allowed, func(upd tg.Update) {
 				b.Go(func() { b.HandleUpdate(workCtx, upd) })
-			}
+			})
 		}()
 		log.Printf("WEBHOOK_URL kosong: menerima update lewat long polling")
 	}
 
 	<-ctx.Done()
 	log.Printf("berhenti...")
-	if cfg.WebhookURL == "" {
-		api.StopReceivingUpdates()
-	}
+	<-pollDone
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {

@@ -73,6 +73,7 @@ Admin (`ADMIN_USER_ID`):
 ```
 cmd/laukpauk/        main: konfigurasi, HTTP server, webhook/polling, graceful shutdown
 internal/bot/        handler Telegram (belanja, checkout, pembayaran, admin, testimoni) + HTTP routes
+internal/telegram/   klien Bot API minimal (net/http + encoding/json, tanpa library pihak ketiga)
 internal/order/      keranjang, voucher, perhitungan total
 internal/poin/       tabel poin loyalitas
 internal/delivery/   jadwal pengiriman

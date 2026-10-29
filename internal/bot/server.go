@@ -8,8 +8,7 @@ import (
 	"log"
 	"net/http"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-
+	tg "github.com/roysitumorang/bot_laukpauk/internal/telegram"
 	"github.com/roysitumorang/bot_laukpauk/internal/xendit"
 )
 
@@ -53,7 +52,7 @@ func (b *Bot) Handler(base context.Context) http.Handler {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error"})
 			return
 		}
-		var upd tgbotapi.Update
+		var upd tg.Update
 		if err := json.Unmarshal(body, &upd); err != nil {
 			log.Printf("telegram webhook: %v", err)
 			writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "message": "invalid update"})

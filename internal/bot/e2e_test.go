@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
 	"github.com/roysitumorang/bot_laukpauk/assets"
 	"github.com/roysitumorang/bot_laukpauk/internal/catalog"
@@ -29,6 +28,7 @@ import (
 	"github.com/roysitumorang/bot_laukpauk/internal/poin"
 	"github.com/roysitumorang/bot_laukpauk/internal/state"
 	"github.com/roysitumorang/bot_laukpauk/internal/store"
+	tg "github.com/roysitumorang/bot_laukpauk/internal/telegram"
 	"github.com/roysitumorang/bot_laukpauk/internal/xendit"
 	"github.com/roysitumorang/bot_laukpauk/migrations"
 )
@@ -57,14 +57,24 @@ type fakeTelegram struct {
 func (f *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
 	method := parts[len(parts)-1]
+	if !strings.HasPrefix(r.URL.Path, "/botTOKEN/") || r.Method != http.MethodPost {
+		http.Error(w, "bad request path", http.StatusNotFound)
+		return
+	}
+	var c tgCall
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
 		_ = r.ParseMultipartForm(20 << 20)
+		c = tgCall{Method: method, ChatID: r.FormValue("chat_id"), Text: r.FormValue("caption")}
 	} else {
-		_ = r.ParseForm()
-	}
-	c := tgCall{Method: method, ChatID: r.FormValue("chat_id"), Text: r.FormValue("text"), Markup: r.FormValue("reply_markup")}
-	if c.Text == "" {
-		c.Text = r.FormValue("caption")
+		// JSON body, as sent by the telegram client.
+		var p map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var text string
+		_ = json.Unmarshal(p["text"], &text)
+		c = tgCall{Method: method, ChatID: string(p["chat_id"]), Text: text, Markup: string(p["reply_markup"])}
 	}
 	if r.MultipartForm != nil {
 		for _, fhs := range r.MultipartForm.File {
@@ -181,13 +191,10 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 
-	tg := &fakeTelegram{}
-	tgSrv := httptest.NewServer(tg)
+	fake := &fakeTelegram{}
+	tgSrv := httptest.NewServer(fake)
 	t.Cleanup(tgSrv.Close)
-	api, err := tgbotapi.NewBotAPIWithAPIEndpoint("TOKEN", tgSrv.URL+"/bot%s/%s")
-	if err != nil {
-		t.Fatal(err)
-	}
+	api := tg.NewWithEndpoint("TOKEN", tgSrv.URL)
 	xen := &fakeXendit{}
 	xenSrv := httptest.NewServer(xen)
 	t.Cleanup(xenSrv.Close)
@@ -215,26 +222,26 @@ func newHarness(t *testing.T) *harness {
 	if _, _, err := b.ReloadCatalog(ctx); err != nil {
 		t.Fatal(err)
 	}
-	tg.take()
-	return &harness{t: t, b: b, tg: tg, xen: xen, db: db, http: b.Handler(ctx)}
+	fake.take()
+	return &harness{t: t, b: b, tg: fake, xen: xen, db: db, http: b.Handler(ctx)}
 }
 
 func (h *harness) msg(from int64, text string) []tgCall {
 	h.update++
-	m := &tgbotapi.Message{MessageID: h.update, From: &tgbotapi.User{ID: from}, Chat: &tgbotapi.Chat{ID: from}, Text: text}
+	m := &tg.Message{MessageID: h.update, From: &tg.User{ID: from}, Chat: tg.Chat{ID: from}, Text: text}
 	if strings.HasPrefix(text, "/") {
 		cmd := strings.Fields(text)[0]
-		m.Entities = []tgbotapi.MessageEntity{{Type: "bot_command", Offset: 0, Length: len(cmd)}}
+		m.Entities = []tg.MessageEntity{{Type: "bot_command", Offset: 0, Length: len(cmd)}}
 	}
-	h.b.HandleUpdate(context.Background(), tgbotapi.Update{UpdateID: h.update, Message: m})
+	h.b.HandleUpdate(context.Background(), tg.Update{UpdateID: h.update, Message: m})
 	return h.tg.take()
 }
 
 func (h *harness) press(from int64, data string) []tgCall {
 	h.update++
-	cb := &tgbotapi.CallbackQuery{ID: fmt.Sprint(h.update), From: &tgbotapi.User{ID: from}, Data: data,
-		Message: &tgbotapi.Message{MessageID: 1, Chat: &tgbotapi.Chat{ID: from}, Text: "previous"}}
-	h.b.HandleUpdate(context.Background(), tgbotapi.Update{UpdateID: h.update, CallbackQuery: cb})
+	cb := &tg.CallbackQuery{ID: fmt.Sprint(h.update), From: &tg.User{ID: from}, Data: data,
+		Message: &tg.Message{MessageID: 1, Chat: tg.Chat{ID: from}, Text: "previous"}}
+	h.b.HandleUpdate(context.Background(), tg.Update{UpdateID: h.update, CallbackQuery: cb})
 	return h.tg.take()
 }
 
@@ -242,14 +249,14 @@ func (h *harness) press(from int64, data string) []tgCall {
 func (h *harness) button(calls []tgCall, label string) string {
 	h.t.Helper()
 	for i := len(calls) - 1; i >= 0; i-- {
-		var mk tgbotapi.InlineKeyboardMarkup
+		var mk tg.InlineKeyboardMarkup
 		if json.Unmarshal([]byte(calls[i].Markup), &mk) != nil {
 			continue
 		}
 		for _, row := range mk.InlineKeyboard {
 			for _, b := range row {
-				if strings.Contains(b.Text, label) && b.CallbackData != nil {
-					return *b.CallbackData
+				if strings.Contains(b.Text, label) && b.CallbackData != "" {
+					return b.CallbackData
 				}
 			}
 		}

@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-
 	"github.com/roysitumorang/bot_laukpauk/internal/catalog"
 	"github.com/roysitumorang/bot_laukpauk/internal/invoice"
 	"github.com/roysitumorang/bot_laukpauk/internal/money"
@@ -19,6 +17,7 @@ import (
 	"github.com/roysitumorang/bot_laukpauk/internal/sheets"
 	"github.com/roysitumorang/bot_laukpauk/internal/state"
 	"github.com/roysitumorang/bot_laukpauk/internal/store"
+	tg "github.com/roysitumorang/bot_laukpauk/internal/telegram"
 	"github.com/roysitumorang/bot_laukpauk/internal/xendit"
 )
 
@@ -48,9 +47,9 @@ func (b *Bot) snapshot(uid int64, s *state.Session, t order.Totals, invoiceID, e
 	}
 }
 
-func payNowKB(url string) *tgbotapi.InlineKeyboardMarkup {
+func payNowKB(url string) *tg.InlineKeyboardMarkup {
 	return kb(
-		row(tgbotapi.NewInlineKeyboardButtonURL("🔗 Bayar Sekarang", url)),
+		row(tg.URLButton("🔗 Bayar Sekarang", url)),
 		row(btn("❌ Batalkan Pesanan", "batal_pesanan")),
 	)
 }
