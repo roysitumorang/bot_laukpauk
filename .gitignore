@@ -39,3 +39,11 @@ nohup.out
 fastapi.log
 fullchain.pem
 privkey.pem
+
+# Go
+/laukpauk
+/bin/
+/data/
+*.test
+*.out
+credentials.json
